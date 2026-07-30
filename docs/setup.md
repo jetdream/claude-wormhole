@@ -108,6 +108,8 @@ tailscale serve --bg off                     # stop serving
 
 ### 5. Run as Service (Auto-start)
 
+#### macOS (launchd)
+
 Auto-start on login with crash recovery via macOS launchd:
 
 ```sh
@@ -119,6 +121,43 @@ wormhole service uninstall   # remove agent
 ```
 
 Logs: `/tmp/claude-wormhole.log` and `/tmp/claude-wormhole.err`
+
+#### Linux (systemd)
+
+`wormhole service *` is launchd-only. On Linux use the unit template in
+`scripts/wormhole.service` — expand the placeholders and install it:
+
+```sh
+sed -e "s|__WORMHOLE_ROOT__|$PWD|g" \
+    -e "s|__WORMHOLE_USER__|$USER|g" \
+    -e "s|__WORMHOLE_HOME__|$HOME|g" \
+    -e "s|__WORMHOLE_PORT__|${PORT:-3100}|g" \
+    scripts/wormhole.service | sudo tee /etc/systemd/system/wormhole.service
+
+npm run build                          # ExecStartPre requires dist/server.cjs
+sudo systemctl daemon-reload
+sudo systemctl enable --now wormhole
+```
+
+```sh
+sudo systemctl status|restart|stop wormhole
+journalctl -u wormhole -f              # logs (NOT /tmp/claude-wormhole.log)
+```
+
+A **system** unit with `User=` is used rather than `systemctl --user`, because a
+user manager only exists while that user is logged in unless you run
+`loginctl enable-linger`. Notes:
+
+- Logs go to journald. Many distros set `fs.protected_regular=2`, which stops
+  systemd (root) from append-opening a user-owned file in world-writable
+  `/tmp` — the launchd plist's log paths would fail the unit with `209/STDOUT`.
+- Don't add `PrivateTmp=` or `ProtectHome=` hardening: the server reaches tmux
+  through the `0700` socket dir in `/tmp/tmux-<uid>/` and reads `$HOME/.claude`.
+- `tailscale serve` needs root unless you run `sudo tailscale set
+  --operator=$USER` once. Without it, `wormhole start` just warns
+  "Tailscale serve failed (is Tailscale running?)" even when Tailscale is up.
+- Prerequisites via apt instead of brew:
+  `sudo apt install -y tmux jq nodejs npm lsof`
 
 ### 6. Push Notifications (Optional)
 
@@ -211,6 +250,12 @@ If the web UI is down, use SSH via Tailscale:
 - Check "Allow incoming connections" is ON in Tailscale settings on Mac
 - Verify both devices are on the same network: `tailscale status`
 - macOS firewall (pf rules) won't help — you need Tailscale's own setting
+
+**`wormhole start` prints the npm banner then exits silently**
+- Older versions sourced `.env.local` unconditionally. In POSIX `sh`, `.` on a
+  missing file is fatal, so the shell died before reaching `node` — and the
+  `2>/dev/null` hid the reason. Fixed by guarding with `[ -f ./.env.local ]`.
+- If you see this on an old checkout: `cp .env.example .env.local`
 
 **Terminal doesn't connect**
 - A tmux session must exist first: `tmux ls`

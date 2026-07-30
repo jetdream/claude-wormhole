@@ -1,0 +1,56 @@
+# systemd unit for claude-wormhole (Linux equivalent of the launchd plist).
+# Template — __WORMHOLE_ROOT__ / __WORMHOLE_USER__ / __WORMHOLE_PORT__ are
+# expanded at install time. Install to /etc/systemd/system/wormhole.service.
+#
+# Why a system unit and not `systemctl --user`: a user manager only exists
+# while the user is logged in unless lingering is enabled. A system unit with
+# User= starts at boot with no login session.
+
+[Unit]
+Description=claude-wormhole web server
+Documentation=https://github.com/shyamsundhar/claude-wormhole
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__WORMHOLE_USER__
+Group=__WORMHOLE_USER__
+WorkingDirectory=__WORMHOLE_ROOT__
+
+# Fail fast with a clear error rather than silently serving nothing.
+# Run `npm run build` (or `wormhole restart`) if this trips.
+ExecStartPre=/usr/bin/test -f __WORMHOLE_ROOT__/dist/server.cjs
+
+# Run node directly rather than via `npm start` so systemd supervises the real
+# process — with npm in between, MainPID is npm's and restarts get muddier.
+ExecStart=/usr/bin/node __WORMHOLE_ROOT__/dist/server.cjs
+
+# Re-assert the Tailscale proxy after a boot. Idempotent; leading `-` keeps a
+# failure here from taking the server down. Requires `tailscale set --operator`.
+ExecStartPost=-/usr/bin/tailscale serve --bg --https=__WORMHOLE_PORT__ http://127.0.0.1:__WORMHOLE_PORT__
+
+Environment=NODE_ENV=production
+# ~/.local/bin puts the claude CLI on PATH for processes spawned via the PTY.
+Environment=PATH=__WORMHOLE_HOME__/.local/bin:__WORMHOLE_HOME__/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+# PORT and any VAPID keys. Optional (`-`) so a missing file is not fatal.
+EnvironmentFile=-__WORMHOLE_ROOT__/.env.local
+
+Restart=always
+RestartSec=3
+
+# Log to journald: `journalctl -u wormhole -f`.
+# Deliberately NOT append:/tmp/claude-wormhole.log like the launchd plist —
+# systemd (root) opens that file, and with fs.protected_regular=2 the kernel
+# denies root an append-open of a user-owned file in world-writable /tmp,
+# so the unit fails at startup with 209/STDOUT.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wormhole
+
+# NOTE: do not add PrivateTmp=yes / ProtectHome=yes. The server attaches to
+# tmux via the socket in /tmp/tmux-<uid>/ (mode 0700) and reads sessions from
+# $HOME/.claude — both namespaces would break it.
+
+[Install]
+WantedBy=multi-user.target
