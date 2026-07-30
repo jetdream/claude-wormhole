@@ -702,7 +702,10 @@ cmd_release() {
   fi
 
   # Apply
-  sed -i '' "s/\"version\": \"${current_version}\"/\"version\": \"${new_version}\"/" "$package_json"
+  # Portable in-place edit: BSD sed needs `-i ''` while GNU sed needs bare `-i`,
+  # so write to a temp file and move it back instead (works on macOS and Linux).
+  sed "s/\"version\": \"${current_version}\"/\"version\": \"${new_version}\"/" "$package_json" > "$package_json.tmp"
+  mv "$package_json.tmp" "$package_json"
 
   if [ -f "$changelog" ]; then
     local temp entry_file
